@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "Nox Browser Bridge",
+  "version": "0.3.0",
+  "description": "Lets the local Nox daemon control Google and YouTube Music.",
+  "permissions": ["alarms", "tabs"],
+  "host_permissions": [
+    "http://127.0.0.1:7080/*",
+    "https://www.google.com/*",
+    "https://music.youtube.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.google.com/*"],
+      "js": ["google-search.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://music.youtube.com/*"],
+      "js": ["youtube-music.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_title": "Nox Browser Bridge"
+  }
+}

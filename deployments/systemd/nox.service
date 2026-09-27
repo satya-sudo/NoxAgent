@@ -1,0 +1,17 @@
+[Unit]
+Description=Nox local voice assistant
+After=network-online.target graphical-session.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/noxd
+Restart=on-failure
+RestartSec=2
+Environment=NOX_ADDRESS=127.0.0.1:7080
+Environment=NOX_ACTION_TIMEOUT=15s
+Environment=NOX_STATE_PATH=%h/.config/nox/state.json
+EnvironmentFile=-%h/.config/nox/nox.env
+
+[Install]
+WantedBy=default.target

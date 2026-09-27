@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#101216">
+  <title>Nox Command Center</title>
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <main class="shell">
+    <header>
+      <div class="brand"><span class="mark">N</span><div><strong>NOX</strong><small>LOCAL COMMAND CENTER</small></div></div>
+      <div class="statuses"><span id="coreStatus" class="status online">CORE ONLINE</span><span id="llmStatus" class="status">LLM OFFLINE</span><span id="browserStatus" class="status">BROWSER</span></div>
+    </header>
+
+    <section class="hero">
+      <p class="eyebrow">PRIVATE · LOCAL · YOURS</p>
+      <h1 id="greeting">Good evening, Sir.</h1>
+      <p class="sub">Speak naturally or type a command. Nox only executes registered, local tools.</p>
+      <button id="voiceButton" class="voice" type="button" aria-label="Start voice command">
+        <span class="rings"></span><span class="mic">●</span>
+      </button>
+      <p id="voiceHint" class="hint">Tap to speak</p>
+      <div class="speech-settings">
+        <label class="speak-toggle"><input id="handsFree" type="checkbox"> Hands-free “Hey Nox”</label>
+        <label class="speak-toggle"><input id="speakReplies" type="checkbox" checked> Speak replies</label>
+        <label class="voice-choice">Voice <select id="voiceChoice" aria-label="Reply voice"></select></label>
+      </div>
+    </section>
+
+    <section class="console" aria-label="Nox conversation">
+      <div id="messages" class="messages"><div class="message nox"><span>NOX</span><p>Ready. Say “Hey Nox” or give me a command.</p></div></div>
+      <form id="commandForm" class="command-form">
+        <input id="commandInput" autocomplete="off" placeholder="Type a command…" aria-label="Command">
+        <button type="submit">RUN</button>
+      </form>
+    </section>
+
+    <section class="quick">
+      <button data-command="what time is it">TIME</button>
+      <button data-command="list timers">TIMERS</button>
+      <button data-command="what track is playing">NOW PLAYING</button>
+      <button data-command="next track">NEXT TRACK</button>
+    </section>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>
