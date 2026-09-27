@@ -1,13 +1,20 @@
 .PHONY: build test run fmt
 
+ifneq (,$(wildcard .env))
+include .env
+export
+endif
+
+GO_ENV := GOMODCACHE="$(CURDIR)/.cache/go-mod" GOCACHE="$(CURDIR)/.cache/go-build"
+
 build:
-	go build ./cmd/...
+	$(GO_ENV) go build ./cmd/...
 
 test:
-	go test ./...
+	$(GO_ENV) go test ./...
 
 run:
-	go run ./cmd/noxd
+	$(GO_ENV) go run ./cmd/noxd
 
 fmt:
 	gofmt -w ./cmd ./internal

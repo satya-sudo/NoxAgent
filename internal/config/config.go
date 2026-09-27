@@ -7,28 +7,35 @@ import (
 )
 
 type Config struct {
-	Address       string
-	ActionTimeout time.Duration
-	StatePath     string
-	HomeURL       string
-	HomeToken     string
-	LLMURL        string
-	LLMModel      string
-	LLMAPIKey     string
-	WhisperBin    string
-	WhisperModel  string
-	WhisperLang   string
+	Address              string
+	ActionTimeout        time.Duration
+	StatePath            string
+	GmailCredentialsPath string
+	GmailTokenPath       string
+	GmailRedirectURL     string
+	HomeURL              string
+	HomeToken            string
+	LLMURL               string
+	LLMModel             string
+	LLMAPIKey            string
+	WhisperBin           string
+	WhisperModel         string
+	WhisperLang          string
 }
 
 func Load() Config {
 	statePath := "nox-state.json"
+	gmailTokenPath := "gmail-token.json"
 	if directory, err := os.UserConfigDir(); err == nil {
 		statePath = filepath.Join(directory, "nox", "state.json")
+		gmailTokenPath = filepath.Join(directory, "nox", "gmail-token.json")
 	}
 	config := Config{
-		Address:       "127.0.0.1:7080",
-		ActionTimeout: 15 * time.Second,
-		StatePath:     statePath,
+		Address:          "127.0.0.1:7080",
+		ActionTimeout:    15 * time.Second,
+		StatePath:        statePath,
+		GmailTokenPath:   gmailTokenPath,
+		GmailRedirectURL: "http://127.0.0.1:7080/v1/integrations/gmail/auth/callback",
 	}
 	if value := os.Getenv("NOX_ADDRESS"); value != "" {
 		config.Address = value
@@ -40,6 +47,13 @@ func Load() Config {
 	}
 	if value := os.Getenv("NOX_STATE_PATH"); value != "" {
 		config.StatePath = value
+	}
+	config.GmailCredentialsPath = os.Getenv("NOX_GMAIL_CREDENTIALS_PATH")
+	if value := os.Getenv("NOX_GMAIL_TOKEN_PATH"); value != "" {
+		config.GmailTokenPath = value
+	}
+	if value := os.Getenv("NOX_GMAIL_REDIRECT_URL"); value != "" {
+		config.GmailRedirectURL = value
 	}
 	config.HomeURL = os.Getenv("NOX_HOME_ASSISTANT_URL")
 	config.HomeToken = os.Getenv("NOX_HOME_ASSISTANT_TOKEN")

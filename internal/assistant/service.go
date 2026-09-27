@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/mail"
 	"strings"
 	"time"
 
 	"nox/internal/browser"
+	"nox/internal/gmail"
 	"nox/internal/homeassistant"
 	"nox/internal/intent"
 	"nox/internal/llm"
@@ -36,6 +38,10 @@ type Interpreter interface {
 	Interpret(context.Context, string) (llm.Decision, error)
 }
 
+type Gmail interface {
+	ListMessages(context.Context, string, int64) ([]gmail.Message, error)
+}
+
 type interpreterStatus interface {
 	Health(context.Context) error
 	Model() string
@@ -50,6 +56,7 @@ type Dependencies struct {
 	Scheduler   Scheduler
 	Home        Home
 	Interpreter Interpreter
+	Gmail       Gmail
 }
 
 type Service struct {
@@ -57,6 +64,7 @@ type Service struct {
 	schedule Scheduler
 	home     Home
 	llm      Interpreter
+	gmail    Gmail
 	now      func() time.Time
 }
 
@@ -71,6 +79,7 @@ func New(dependencies Dependencies) *Service {
 		schedule: dependencies.Scheduler,
 		home:     dependencies.Home,
 		llm:      dependencies.Interpreter,
+		gmail:    dependencies.Gmail,
 		now:      time.Now,
 	}
 }
@@ -140,6 +149,9 @@ func (s *Service) handle(ctx context.Context, input string) (Reply, error) {
 	if strings.HasPrefix(parsed.Name, "home.") {
 		return s.handleHome(ctx, parsed)
 	}
+	if strings.HasPrefix(parsed.Name, "gmail.") {
+		return s.handleGmail(ctx, parsed)
+	}
 
 	action := browser.Action{Type: parsed.Name, Query: parsed.Query, Value: parsed.Value}
 	result, err := s.browser.Execute(ctx, action)
@@ -172,6 +184,7 @@ func decisionIntent(decision llm.Decision) (intent.Intent, error) {
 		"home.turn_off":         true,
 		"home.activate_scene":   true,
 		"home.state":            true,
+		"gmail.search":          true,
 	}
 	if needsQuery[parsed.Name] && parsed.Query == "" {
 		return intent.Intent{}, fmt.Errorf("local LLM omitted a required query for %s", parsed.Name)
@@ -180,6 +193,55 @@ func decisionIntent(decision llm.Decision) (intent.Intent, error) {
 		return intent.Intent{}, fmt.Errorf("local LLM returned an invalid timer duration")
 	}
 	return parsed, nil
+}
+
+func (s *Service) handleGmail(ctx context.Context, parsed intent.Intent) (Reply, error) {
+	if s.gmail == nil {
+		return Reply{}, fmt.Errorf("Gmail is not configured")
+	}
+	query := parsed.Query
+	if parsed.Name == "gmail.unread" {
+		query = "is:unread in:inbox"
+	}
+	messages, err := s.gmail.ListMessages(ctx, query, 5)
+	if err != nil {
+		return Reply{}, err
+	}
+	if len(messages) == 0 {
+		if parsed.Name == "gmail.unread" {
+			return Reply{Intent: parsed.Name, Message: "You have no unread email."}, nil
+		}
+		return Reply{Intent: parsed.Name, Message: "I found no matching email."}, nil
+	}
+	parts := make([]string, 0, min(len(messages), 3))
+	for _, message := range messages[:min(len(messages), 3)] {
+		sender := senderName(message.From)
+		subject := strings.TrimSpace(message.Subject)
+		if subject == "" {
+			subject = "no subject"
+		}
+		parts = append(parts, fmt.Sprintf("from %s, %s", sender, subject))
+	}
+	prefix := fmt.Sprintf("I found %d email(s).", len(messages))
+	if parsed.Name == "gmail.unread" {
+		prefix = fmt.Sprintf("You have %d unread email(s).", len(messages))
+	}
+	return Reply{Intent: parsed.Name, Message: prefix + " " + strings.Join(parts, "; ") + "."}, nil
+}
+
+func senderName(value string) string {
+	address, err := mail.ParseAddress(value)
+	if err == nil {
+		if strings.TrimSpace(address.Name) != "" {
+			return address.Name
+		}
+		return address.Address
+	}
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "an unknown sender"
+	}
+	return value
 }
 
 func (s *Service) handleHome(ctx context.Context, parsed intent.Intent) (Reply, error) {

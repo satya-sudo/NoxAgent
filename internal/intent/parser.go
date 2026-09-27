@@ -59,6 +59,15 @@ func Parse(input string) (Intent, error) {
 		return Intent{Name: "wake.greet"}, nil
 	case lower == "time" || strings.Contains(lower, "what time") || strings.Contains(lower, "tell me the time"):
 		return Intent{Name: "clock.time"}, nil
+	case lower == "check my email" || lower == "check email" || lower == "check gmail" ||
+		lower == "do i have new email" || lower == "do i have new emails" ||
+		lower == "any unread email" || lower == "any unread emails" ||
+		lower == "read my unread email" || lower == "read my unread emails":
+		return Intent{Name: "gmail.unread"}, nil
+	case strings.HasPrefix(lower, "search gmail for "):
+		return withQuery("gmail.search", text[len("search gmail for "):])
+	case strings.HasPrefix(lower, "search my email for "):
+		return withQuery("gmail.search", text[len("search my email for "):])
 	case strings.HasPrefix(lower, "search google for "):
 		return withQuery("browser.google_search", text[len("search google for "):])
 	case strings.HasPrefix(lower, "search goofle for "):
@@ -184,6 +193,7 @@ func stripSpeechPreamble(value string) string {
 			"play ", "search ", "google ", "set ", "start ", "turn ",
 			"activate ", "pause", "resume", "next", "previous", "skip",
 			"list ", "show ", "cancel ", "what ", "time", "status ",
+			"check ", "read my ",
 		} {
 			if strings.HasPrefix(lower, prefix) {
 				return candidate

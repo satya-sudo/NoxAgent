@@ -1,6 +1,12 @@
 /bin/
 /models/
+/.cache/
+.env
+.env.*
+!.env.example
 *.db
 *.db-shm
 *.db-wal
+client_secret*.json
+gmail-token*.json
 .DS_Store

@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"nox/internal/gmail"
 	"nox/internal/llm"
 	"nox/internal/scheduler"
 )
@@ -39,6 +40,15 @@ func (f *fakeScheduler) Cancel(_ scheduler.Kind, _ string) (int, error) {
 
 type fakeInterpreter struct {
 	decision llm.Decision
+}
+
+type fakeGmail struct {
+	query string
+}
+
+func (f *fakeGmail) ListMessages(_ context.Context, query string, _ int64) ([]gmail.Message, error) {
+	f.query = query
+	return []gmail.Message{{From: "Alice Example <alice@example.com>", Subject: "Project update"}}, nil
 }
 
 func (f fakeInterpreter) Interpret(context.Context, string) (llm.Decision, error) {
@@ -85,5 +95,20 @@ func TestDecisionIntentRequiresSafeArguments(t *testing.T) {
 	_, err := decisionIntent(llm.Decision{Action: "home.turn_on"})
 	if err == nil {
 		t.Fatal("decisionIntent accepted a missing entity query")
+	}
+}
+
+func TestHandleUnreadGmail(t *testing.T) {
+	mailbox := &fakeGmail{}
+	service := New(Dependencies{Gmail: mailbox})
+	reply, err := service.Handle(context.Background(), "check my email")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mailbox.query != "is:unread in:inbox" {
+		t.Fatalf("query = %q", mailbox.query)
+	}
+	if reply.Intent != "gmail.unread" || reply.Message != "You have 1 unread email(s). from Alice Example, Project update." {
+		t.Fatalf("reply = %#v", reply)
 	}
 }

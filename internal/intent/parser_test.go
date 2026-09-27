@@ -21,6 +21,8 @@ func TestParse(t *testing.T) {
 		{name: "speech preamble", input: "Enough, play some music on YouTube.", intent: Intent{Name: "youtube_music.play", Query: "some music"}},
 		{name: "google", input: "search Google for Go context tutorial", intent: Intent{Name: "browser.google_search", Query: "Go context tutorial"}},
 		{name: "google typo", input: "search goofle for weather in Delhi", intent: Intent{Name: "browser.google_search", Query: "weather in Delhi"}},
+		{name: "gmail unread", input: "check my email", intent: Intent{Name: "gmail.unread"}},
+		{name: "gmail search", input: "search Gmail for from:alice", intent: Intent{Name: "gmail.search", Query: "from:alice"}},
 		{name: "play", input: "play Blinding Lights on YouTube Music", intent: Intent{Name: "youtube_music.play", Query: "Blinding Lights"}},
 		{name: "pause", input: "pause the music", intent: Intent{Name: "youtube_music.pause"}},
 		{name: "next", input: "skip song", intent: Intent{Name: "youtube_music.next"}},
