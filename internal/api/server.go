@@ -17,6 +17,7 @@ import (
 	"nox/internal/gmail"
 	"nox/internal/intent"
 	"nox/internal/voice"
+	"nox/internal/wiz"
 )
 
 type Server struct {
@@ -24,6 +25,7 @@ type Server struct {
 	broker        *browser.Broker
 	transcriber   voice.Transcriber
 	gmail         *gmail.Client
+	wiz           *wiz.Client
 	actionTimeout time.Duration
 	logger        *slog.Logger
 }
@@ -36,6 +38,10 @@ func WithTranscriber(transcriber voice.Transcriber) Option {
 
 func WithGmail(client *gmail.Client) Option {
 	return func(server *Server) { server.gmail = client }
+}
+
+func WithWiZ(client *wiz.Client) Option {
+	return func(server *Server) { server.wiz = client }
 }
 
 func New(service *assistant.Service, broker *browser.Broker, actionTimeout time.Duration, logger *slog.Logger, options ...Option) http.Handler {
@@ -54,6 +60,8 @@ func New(service *assistant.Service, broker *browser.Broker, actionTimeout time.
 	mux.HandleFunc("GET /v1/integrations/gmail/auth/start", s.gmailAuthStart)
 	mux.HandleFunc("GET /v1/integrations/gmail/auth/callback", s.gmailAuthCallback)
 	mux.HandleFunc("GET /v1/integrations/gmail/messages", s.gmailMessages)
+	mux.HandleFunc("GET /v1/integrations/wiz/status", s.wizStatus)
+	mux.HandleFunc("POST /v1/integrations/wiz/discover", s.wizDiscover)
 	mux.HandleFunc("GET /v1/browser/actions/next", s.nextAction)
 	mux.HandleFunc("POST /v1/browser/actions/{id}/complete", s.completeAction)
 	mux.Handle("GET /", uiHandler())
@@ -67,13 +75,41 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	if s.gmail != nil {
 		gmailStatus = s.gmail.Status()
 	}
+	wizStatus := map[string]any{"configured": false, "devices": []wiz.Device{}}
+	if s.wiz != nil {
+		wizStatus = map[string]any{"configured": true, "devices": s.wiz.Devices()}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":  "ok",
 		"browser": s.broker.Status(time.Now()),
 		"voice":   map[string]bool{"configured": s.transcriber != nil},
 		"llm":     s.assistant.LLMStatus(ctx),
 		"gmail":   gmailStatus,
+		"wiz":     wizStatus,
 	})
+}
+
+func (s *Server) wizStatus(w http.ResponseWriter, _ *http.Request) {
+	if s.wiz == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"configured": false, "devices": []wiz.Device{}})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"configured": true, "devices": s.wiz.Devices()})
+}
+
+func (s *Server) wizDiscover(w http.ResponseWriter, r *http.Request) {
+	if s.wiz == nil {
+		writeError(w, http.StatusServiceUnavailable, "WiZ integration is not configured")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+	devices, err := s.wiz.Discover(ctx)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"devices": devices})
 }
 
 func (s *Server) gmailStatus(w http.ResponseWriter, _ *http.Request) {

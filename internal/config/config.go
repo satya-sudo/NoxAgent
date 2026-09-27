@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -21,6 +22,9 @@ type Config struct {
 	WhisperBin           string
 	WhisperModel         string
 	WhisperLang          string
+	WiZEnabled           bool
+	WiZLights            string
+	WiZBroadcast         string
 }
 
 func Load() Config {
@@ -63,5 +67,11 @@ func Load() Config {
 	config.WhisperBin = os.Getenv("NOX_WHISPER_BIN")
 	config.WhisperModel = os.Getenv("NOX_WHISPER_MODEL")
 	config.WhisperLang = os.Getenv("NOX_WHISPER_LANGUAGE")
+	config.WiZEnabled = strings.EqualFold(os.Getenv("NOX_WIZ_ENABLED"), "true")
+	config.WiZLights = os.Getenv("NOX_WIZ_LIGHTS")
+	config.WiZBroadcast = os.Getenv("NOX_WIZ_BROADCAST")
+	if config.WiZLights != "" {
+		config.WiZEnabled = true
+	}
 	return config
 }

@@ -20,6 +20,7 @@ import (
 	"nox/internal/notify"
 	"nox/internal/scheduler"
 	"nox/internal/voice"
+	"nox/internal/wiz"
 )
 
 func main() {
@@ -74,19 +75,32 @@ func main() {
 		}
 		logger.Info("Gmail read-only integration enabled", "redirect_url", settings.GmailRedirectURL)
 	}
+	var wizClient *wiz.Client
+	if settings.WiZEnabled {
+		wizClient, err = wiz.New(settings.WiZLights, settings.WiZBroadcast)
+		if err != nil {
+			logger.Error("invalid WiZ configuration", "error", err)
+			os.Exit(1)
+		}
+		logger.Info("WiZ local integration enabled", "configured_devices", len(wizClient.Devices()))
+	}
 	service := assistant.New(assistant.Dependencies{
 		Browser:     broker,
 		Scheduler:   schedules,
 		Home:        home,
 		Interpreter: interpreter,
 		Gmail:       gmailClient,
+		WiZ:         wizClient,
 	})
-	options := make([]api.Option, 0, 2)
+	options := make([]api.Option, 0, 3)
 	if transcriber != nil {
 		options = append(options, api.WithTranscriber(transcriber))
 	}
 	if gmailClient != nil {
 		options = append(options, api.WithGmail(gmailClient))
+	}
+	if wizClient != nil {
+		options = append(options, api.WithWiZ(wizClient))
 	}
 	var handler http.Handler = api.New(service, broker, settings.ActionTimeout, logger, options...)
 

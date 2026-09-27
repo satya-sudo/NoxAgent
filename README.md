@@ -26,6 +26,7 @@ web dashboard, an interactive terminal, or its HTTP API.
 - Recover scheduled timers and alarms after a Nox restart.
 - Control Home Assistant lights, switches, scenes, and read entity state.
 - Check unread Gmail and search message metadata through read-only OAuth.
+- Discover and control WiZ lights and projectors directly over the local LAN.
 - Run without a cloud speech or conversational API.
 
 ## Architecture
@@ -194,6 +195,7 @@ natural phrasings to the same registered actions.
 | Scenes | `Activate scene movie night` |
 | Sensors | `Status of bedroom temperature` |
 | Gmail | `Check my email`, `search Gmail for from:alice` |
+| WiZ | `Turn on the T-Beamer`, `make the T-Beamer warm and 20%` |
 | Conversation | `Tell me something about the Moon`, then `How long does it take to orbit us?` |
 
 Nox returns a short identifier when it creates an alarm or timer. Use that
@@ -219,6 +221,9 @@ Nox is configured with environment variables.
 | `NOX_GMAIL_CREDENTIALS_PATH` | unset | Google OAuth web-client JSON; enables Gmail |
 | `NOX_GMAIL_TOKEN_PATH` | OS user config directory | Protected local OAuth token file |
 | `NOX_GMAIL_REDIRECT_URL` | `http://127.0.0.1:7080/v1/integrations/gmail/auth/callback` | OAuth callback URL |
+| `NOX_WIZ_ENABLED` | `false` | Enable direct local WiZ control |
+| `NOX_WIZ_LIGHTS` | unset | Optional aliases such as `t-beamer=192.168.1.50` |
+| `NOX_WIZ_BROADCAST` | `255.255.255.255` | LAN broadcast address used for discovery |
 
 Voice recognition is enabled only when both `NOX_WHISPER_BIN` and
 `NOX_WHISPER_MODEL` are set. The LLM is optional; without it, registered
@@ -270,6 +275,34 @@ default under the OS user configuration directory with mode `0600`. OAuth
 client files and Gmail token files are ignored by Git; neither should be
 committed. If Nox listens at another address, configure the same exact URL in
 Google Cloud and `NOX_GMAIL_REDIRECT_URL`.
+
+## WiZ local control
+
+Nox controls WiZ devices directly from Go over UDP port `38899`; it does not
+need Home Assistant, an MCP subprocess, a cloud API, or an API key. Enable
+**Local communication** in the WiZ app, keep Nox and the device on the same
+LAN, and add this to `.env`:
+
+```env
+NOX_WIZ_ENABLED=true
+```
+
+Trigger discovery after restarting Nox:
+
+```sh
+curl -sS -X POST http://127.0.0.1:7080/v1/integrations/wiz/discover
+curl -sS http://127.0.0.1:7080/v1/integrations/wiz/status
+```
+
+If broadcast discovery is blocked by the router or macOS firewall, assign the
+T-Beamer a DHCP reservation and configure it explicitly:
+
+```env
+NOX_WIZ_LIGHTS=t-beamer=192.168.1.50
+```
+
+The current integration supports on/off, brightness from 10–100%, and color
+temperature from 2200–6500 K. RGB colors and WiZ scenes are planned next.
 
 ## HTTP API
 
@@ -423,6 +456,7 @@ internal/browser/         Typed browser-action broker
 internal/scheduler/       Persistent timers and alarms
 internal/homeassistant/   Home Assistant client
 internal/gmail/           Gmail OAuth and read-only API client
+internal/wiz/             Native WiZ LAN discovery and UDP control
 internal/notify/          macOS/Linux notifications
 extension/                Chromium browser bridge
 deployments/systemd/      Linux user service

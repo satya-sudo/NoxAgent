@@ -11,22 +11,27 @@ import (
 var ErrUnknown = errors.New("I don't know how to do that yet")
 
 type Intent struct {
-	Name      string
-	Query     string
-	Value     int
-	Duration  time.Duration
-	Hour      int
-	Minute    int
-	DayOffset int
+	Name        string
+	Query       string
+	Value       int
+	Duration    time.Duration
+	Hour        int
+	Minute      int
+	DayOffset   int
+	Temperature int
 }
 
 var volumePattern = regexp.MustCompile(`(?i)(?:set\s+)?(?:the\s+)?volume(?:\s+to)?\s+(\d{1,3})(?:\s*%)?`)
 var timerPattern = regexp.MustCompile(`(?i)^(?:set|start)\s+(?:a\s+)?timer\s+for\s+(.+)$`)
 var alarmPattern = regexp.MustCompile(`(?i)^set\s+(?:an\s+)?alarm\s+(?:for|at)\s+(.+)$`)
+var wizBrightnessPattern = regexp.MustCompile(`(?i)^set\s+(?:the\s+)?(.+?)\s+(?:brightness\s+)?to\s+(\d{1,3})(?:\s*%)?$`)
+var wizWarmPattern = regexp.MustCompile(`(?i)^(?:make|set|turn)\s+(?:the\s+)?(.+?)\s+(?:to\s+)?(warm(?:\s+white)?|cool(?:\s+white)?|daylight|white)(?:\s+color)?(?:\s+(?:and|at)\s+(\d{1,3})(?:\s*%)?)?$`)
+var youtubeSuffixPattern = regexp.MustCompile(`(?i)\s+on\s+youtube(?:\s+music)?(?:[\s?!.,]+music)?[\s?!.,]*$`)
 
 func Parse(input string) (Intent, error) {
 	text := strings.TrimSpace(input)
 	text = stripSpeechPreamble(text)
+	text = stripPolitePrefix(text)
 	lower := strings.ToLower(strings.Trim(text, " .?!"))
 	if lower == "" {
 		return Intent{}, ErrUnknown
@@ -36,6 +41,7 @@ func Parse(input string) (Intent, error) {
 			return Intent{Name: "wake.greet"}, nil
 		}
 		text = strings.TrimSpace(remainder)
+		text = stripPolitePrefix(text)
 		lower = strings.ToLower(strings.Trim(text, " .?!"))
 	}
 
@@ -52,6 +58,31 @@ func Parse(input string) (Intent, error) {
 			return Intent{Name: "alarm.set", Hour: hour, Minute: minute, DayOffset: dayOffset}, nil
 		}
 		return Intent{}, ErrUnknown
+	}
+	if matches := wizWarmPattern.FindStringSubmatch(lower); len(matches) == 4 && isWiZTarget(matches[1]) {
+		brightness := 0
+		if matches[3] != "" {
+			brightness, _ = strconv.Atoi(matches[3])
+			if brightness < 10 || brightness > 100 {
+				return Intent{}, ErrUnknown
+			}
+		}
+		temperature := 2700
+		if strings.HasPrefix(matches[2], "cool") {
+			temperature = 5000
+		} else if matches[2] == "daylight" {
+			temperature = 4200
+		} else if matches[2] == "white" {
+			temperature = 4000
+		}
+		return Intent{Name: "wiz.set", Query: cleanWiZTarget(matches[1]), Value: brightness, Temperature: temperature}, nil
+	}
+	if matches := wizBrightnessPattern.FindStringSubmatch(lower); len(matches) == 3 && isWiZTarget(matches[1]) {
+		brightness, _ := strconv.Atoi(matches[2])
+		if brightness < 10 || brightness > 100 {
+			return Intent{}, ErrUnknown
+		}
+		return Intent{Name: "wiz.set", Query: cleanWiZTarget(matches[1]), Value: brightness}, nil
 	}
 
 	switch {
@@ -107,9 +138,15 @@ func Parse(input string) (Intent, error) {
 		return withQuery("timer.cancel", value)
 	}
 	if value, ok := cutPrefixFold(text, "turn on "); ok {
+		if isWiZTarget(value) {
+			return withQuery("wiz.turn_on", cleanWiZTarget(value))
+		}
 		return withQuery("home.turn_on", value)
 	}
 	if value, ok := cutPrefixFold(text, "turn off "); ok {
+		if isWiZTarget(value) {
+			return withQuery("wiz.turn_off", cleanWiZTarget(value))
+		}
 		return withQuery("home.turn_off", value)
 	}
 	if value, ok := cutPrefixFold(text, "activate scene "); ok {
@@ -134,12 +171,38 @@ func Parse(input string) (Intent, error) {
 
 	if strings.HasPrefix(lower, "play ") {
 		query := strings.TrimSpace(strings.Trim(text[len("play "):], " .?!"))
-		query = trimSuffixFold(query, " on youtube music")
-		query = trimSuffixFold(query, " on youtube")
+		query = youtubeSuffixPattern.ReplaceAllString(query, "")
 		return withQuery("youtube_music.play", query)
 	}
 
 	return Intent{}, ErrUnknown
+}
+
+func stripPolitePrefix(value string) string {
+	value = strings.TrimSpace(value)
+	for _, prefix := range []string{"can you please ", "could you please ", "would you please ", "can you ", "could you ", "would you ", "please "} {
+		if len(value) >= len(prefix) && strings.EqualFold(value[:len(prefix)], prefix) {
+			return strings.TrimSpace(value[len(prefix):])
+		}
+	}
+	return value
+}
+
+func isWiZTarget(value string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	return strings.Contains(value, "t-beamer") || strings.Contains(value, "t beamer") ||
+		strings.HasPrefix(value, "wiz ") || strings.HasPrefix(value, "the wiz ")
+}
+
+func cleanWiZTarget(value string) string {
+	value = strings.TrimSpace(value)
+	if strings.HasPrefix(strings.ToLower(value), "the ") {
+		value = strings.TrimSpace(value[4:])
+	}
+	if strings.HasPrefix(strings.ToLower(value), "wiz ") {
+		value = strings.TrimSpace(value[4:])
+	}
+	return strings.ReplaceAll(value, "t beamer", "t-beamer")
 }
 
 // Speech recognizers commonly render the name "Nox" as the homophones
