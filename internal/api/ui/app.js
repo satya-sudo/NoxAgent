@@ -1,9 +1,30 @@
 const $ = (id) => document.getElementById(id);
 const messages = $("messages");
 let recording = null;
-let armedUntil = 0;
+let wakeSessionActive = false;
+let wakeSessionTimer = null;
 let speaking = false;
 let restartTimer = null;
+
+function handsFreeHint() {
+  return wakeSessionActive ? "Listening for your command…" : "Waiting for “Hey Nox”…";
+}
+
+function closeWakeSession() {
+  clearTimeout(wakeSessionTimer);
+  wakeSessionTimer = null;
+  wakeSessionActive = false;
+}
+
+function armWakeSession() {
+  closeWakeSession();
+  wakeSessionActive = true;
+  $("voiceHint").textContent = handsFreeHint();
+  wakeSessionTimer = setTimeout(() => {
+    closeWakeSession();
+    if (!recording && $("handsFree").checked) $("voiceHint").textContent = handsFreeHint();
+  }, 15000);
+}
 
 const hour = new Date().getHours();
 $("greeting").textContent = `Good ${hour < 12 ? "morning" : hour < 17 ? "afternoon" : "evening"}, Sir.`;
@@ -117,6 +138,7 @@ async function toggleRecording(automatic = false) {
     return;
   }
   if (window.speechSynthesis) speechSynthesis.cancel();
+  const wakeFollowUp = automatic && wakeSessionActive;
   const stream = await navigator.mediaDevices.getUserMedia({
     audio: {channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true},
   });
@@ -178,7 +200,7 @@ async function toggleRecording(automatic = false) {
     const wav = encodeWav(chunks, context.sampleRate, 16000);
     await context.close();
     if (!submit || (automatic && !speechDetected)) {
-      $("voiceHint").textContent = "Waiting for “Hey Nox”…";
+      $("voiceHint").textContent = handsFreeHint();
       restartHandsFree();
       return;
     }
@@ -192,30 +214,36 @@ async function toggleRecording(automatic = false) {
         method: "POST",
         headers: {
           "Content-Type": "audio/wav",
-          "X-Nox-Require-Wake": automatic && Date.now() > armedUntil ? "true" : "false",
+          "X-Nox-Require-Wake": automatic && !wakeFollowUp ? "true" : "false",
         },
         body: wav,
       });
       const data = await response.json();
       if (data.ignored) {
-        $("voiceHint").textContent = "Waiting for “Hey Nox”…";
+        $("voiceHint").textContent = handsFreeHint();
         return;
       }
       if (data.transcript) addMessage("user", data.transcript);
       if (response.ok) {
         const reply = data.reply?.message || "Done.";
         addMessage("nox", reply);
-        armedUntil = data.reply?.intent === "wake.greet" ? Date.now() + 9000 : 0;
         await speak(reply);
+        if (data.reply?.intent === "wake.greet") {
+          armWakeSession();
+        } else if (wakeFollowUp) {
+          closeWakeSession();
+        }
       } else if (data.transcript) {
+        if (wakeFollowUp) closeWakeSession();
         addMessage("nox", `I heard “${data.transcript}”, but I couldn't match it to a command.`);
       } else {
         addMessage("nox", data.error || "I couldn't understand the recording.");
       }
     } catch {
+      if (wakeFollowUp) closeWakeSession();
       addMessage("nox", "I couldn't reach the Nox service.");
     } finally {
-      $("voiceHint").textContent = automatic ? "Waiting for “Hey Nox”…" : "Tap to speak";
+      $("voiceHint").textContent = automatic ? handsFreeHint() : "Tap to speak";
       restartHandsFree();
     }
   };
@@ -223,7 +251,7 @@ async function toggleRecording(automatic = false) {
   recording = {stop, automatic};
   if (!automatic) recording.timeout = setTimeout(stop, 15000);
   $("voiceButton").classList.add("recording");
-  $("voiceHint").textContent = automatic ? "Waiting for “Hey Nox”…" : "Listening… tap when finished";
+  $("voiceHint").textContent = automatic ? handsFreeHint() : "Listening… tap when finished";
 }
 
 $("voiceButton").addEventListener("click", () => {
@@ -234,8 +262,9 @@ $("handsFree").addEventListener("change", async (event) => {
   localStorage.setItem("noxHandsFree", event.target.checked ? "true" : "false");
   if (event.target.checked) {
     restartHandsFree(0);
-  } else if (recording?.automatic) {
-    await recording.stop(false);
+  } else {
+    closeWakeSession();
+    if (recording?.automatic) await recording.stop(false);
     $("voiceHint").textContent = "Tap to speak";
   }
 });
@@ -291,7 +320,7 @@ async function refreshStatus() {
     $("llmStatus").classList.toggle("online", Boolean(status.llm?.available));
     if (!recording) {
       $("voiceHint").textContent = status.voice.configured
-        ? ($("handsFree").checked ? "Waiting for “Hey Nox”…" : "Tap to speak")
+        ? ($("handsFree").checked ? handsFreeHint() : "Tap to speak")
         : "Voice model not configured";
     }
     $("voiceButton").disabled = !status.voice.configured;
