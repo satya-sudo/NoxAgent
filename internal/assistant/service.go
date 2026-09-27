@@ -14,6 +14,7 @@ import (
 	"nox/internal/intent"
 	"nox/internal/llm"
 	"nox/internal/scheduler"
+	"nox/internal/wiz"
 )
 
 type Browser interface {
@@ -42,6 +43,10 @@ type Gmail interface {
 	ListMessages(context.Context, string, int64) ([]gmail.Message, error)
 }
 
+type WiZ interface {
+	Set(context.Context, string, wiz.Settings) (wiz.Device, error)
+}
+
 type interpreterStatus interface {
 	Health(context.Context) error
 	Model() string
@@ -57,6 +62,7 @@ type Dependencies struct {
 	Home        Home
 	Interpreter Interpreter
 	Gmail       Gmail
+	WiZ         WiZ
 }
 
 type Service struct {
@@ -65,6 +71,7 @@ type Service struct {
 	home     Home
 	llm      Interpreter
 	gmail    Gmail
+	wiz      WiZ
 	now      func() time.Time
 }
 
@@ -80,6 +87,7 @@ func New(dependencies Dependencies) *Service {
 		home:     dependencies.Home,
 		llm:      dependencies.Interpreter,
 		gmail:    dependencies.Gmail,
+		wiz:      dependencies.WiZ,
 		now:      time.Now,
 	}
 }
@@ -152,6 +160,9 @@ func (s *Service) handle(ctx context.Context, input string) (Reply, error) {
 	if strings.HasPrefix(parsed.Name, "gmail.") {
 		return s.handleGmail(ctx, parsed)
 	}
+	if strings.HasPrefix(parsed.Name, "wiz.") {
+		return s.handleWiZ(ctx, parsed)
+	}
 
 	action := browser.Action{Type: parsed.Name, Query: parsed.Query, Value: parsed.Value}
 	result, err := s.browser.Execute(ctx, action)
@@ -167,13 +178,14 @@ func (s *Service) handle(ctx context.Context, input string) (Reply, error) {
 
 func decisionIntent(decision llm.Decision) (intent.Intent, error) {
 	parsed := intent.Intent{
-		Name:      decision.Action,
-		Query:     strings.TrimSpace(decision.Query),
-		Value:     decision.Value,
-		Duration:  time.Duration(decision.DurationSeconds) * time.Second,
-		Hour:      decision.Hour,
-		Minute:    decision.Minute,
-		DayOffset: decision.DayOffset,
+		Name:        decision.Action,
+		Query:       strings.TrimSpace(decision.Query),
+		Value:       decision.Value,
+		Duration:    time.Duration(decision.DurationSeconds) * time.Second,
+		Hour:        decision.Hour,
+		Minute:      decision.Minute,
+		DayOffset:   decision.DayOffset,
+		Temperature: decision.Temperature,
 	}
 	needsQuery := map[string]bool{
 		"browser.google_search": true,
@@ -185,6 +197,9 @@ func decisionIntent(decision llm.Decision) (intent.Intent, error) {
 		"home.activate_scene":   true,
 		"home.state":            true,
 		"gmail.search":          true,
+		"wiz.turn_on":           true,
+		"wiz.turn_off":          true,
+		"wiz.set":               true,
 	}
 	if needsQuery[parsed.Name] && parsed.Query == "" {
 		return intent.Intent{}, fmt.Errorf("local LLM omitted a required query for %s", parsed.Name)
@@ -193,6 +208,43 @@ func decisionIntent(decision llm.Decision) (intent.Intent, error) {
 		return intent.Intent{}, fmt.Errorf("local LLM returned an invalid timer duration")
 	}
 	return parsed, nil
+}
+
+func (s *Service) handleWiZ(ctx context.Context, parsed intent.Intent) (Reply, error) {
+	if s.wiz == nil {
+		return Reply{}, fmt.Errorf("WiZ control is not configured")
+	}
+	settings := wiz.Settings{Dimming: parsed.Value, Temperature: parsed.Temperature}
+	switch parsed.Name {
+	case "wiz.turn_on":
+		state := true
+		settings.State = &state
+	case "wiz.turn_off":
+		state := false
+		settings.State = &state
+	case "wiz.set":
+		state := true
+		settings.State = &state
+	default:
+		return Reply{}, intent.ErrUnknown
+	}
+	device, err := s.wiz.Set(ctx, parsed.Query, settings)
+	if err != nil {
+		return Reply{}, err
+	}
+	message := fmt.Sprintf("Updated %s.", device.Name)
+	if parsed.Name == "wiz.turn_on" {
+		message = fmt.Sprintf("Turned on %s.", device.Name)
+	} else if parsed.Name == "wiz.turn_off" {
+		message = fmt.Sprintf("Turned off %s.", device.Name)
+	} else if parsed.Temperature != 0 && parsed.Value != 0 {
+		message = fmt.Sprintf("Set %s to %d Kelvin at %d percent.", device.Name, parsed.Temperature, parsed.Value)
+	} else if parsed.Temperature != 0 {
+		message = fmt.Sprintf("Set %s to %d Kelvin.", device.Name, parsed.Temperature)
+	} else if parsed.Value != 0 {
+		message = fmt.Sprintf("Set %s brightness to %d percent.", device.Name, parsed.Value)
+	}
+	return Reply{Intent: parsed.Name, Message: message}, nil
 }
 
 func (s *Service) handleGmail(ctx context.Context, parsed intent.Intent) (Reply, error) {
