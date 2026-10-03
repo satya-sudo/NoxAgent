@@ -14,24 +14,41 @@ import (
 
 	"nox/internal/assistant"
 	"nox/internal/browser"
+	"nox/internal/gmail"
 	"nox/internal/intent"
 	"nox/internal/voice"
+	"nox/internal/wiz"
 )
 
 type Server struct {
 	assistant     *assistant.Service
 	broker        *browser.Broker
 	transcriber   voice.Transcriber
+	gmail         *gmail.Client
+	wiz           *wiz.Client
 	actionTimeout time.Duration
 	logger        *slog.Logger
 }
 
-func New(service *assistant.Service, broker *browser.Broker, actionTimeout time.Duration, logger *slog.Logger, transcribers ...voice.Transcriber) http.Handler {
-	var transcriber voice.Transcriber
-	if len(transcribers) > 0 {
-		transcriber = transcribers[0]
+type Option func(*Server)
+
+func WithTranscriber(transcriber voice.Transcriber) Option {
+	return func(server *Server) { server.transcriber = transcriber }
+}
+
+func WithGmail(client *gmail.Client) Option {
+	return func(server *Server) { server.gmail = client }
+}
+
+func WithWiZ(client *wiz.Client) Option {
+	return func(server *Server) { server.wiz = client }
+}
+
+func New(service *assistant.Service, broker *browser.Broker, actionTimeout time.Duration, logger *slog.Logger, options ...Option) http.Handler {
+	s := &Server{assistant: service, broker: broker, actionTimeout: actionTimeout, logger: logger}
+	for _, option := range options {
+		option(s)
 	}
-	s := &Server{assistant: service, broker: broker, transcriber: transcriber, actionTimeout: actionTimeout, logger: logger}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.health)
 	mux.HandleFunc("POST /v1/commands", s.command)
@@ -39,6 +56,12 @@ func New(service *assistant.Service, broker *browser.Broker, actionTimeout time.
 	mux.HandleFunc("GET /v1/browser/keepalive", s.browserKeepalive)
 	mux.HandleFunc("GET /v1/status", s.status)
 	mux.HandleFunc("POST /v1/voice/commands", s.voiceCommand)
+	mux.HandleFunc("GET /v1/integrations/gmail/status", s.gmailStatus)
+	mux.HandleFunc("GET /v1/integrations/gmail/auth/start", s.gmailAuthStart)
+	mux.HandleFunc("GET /v1/integrations/gmail/auth/callback", s.gmailAuthCallback)
+	mux.HandleFunc("GET /v1/integrations/gmail/messages", s.gmailMessages)
+	mux.HandleFunc("GET /v1/integrations/wiz/status", s.wizStatus)
+	mux.HandleFunc("POST /v1/integrations/wiz/discover", s.wizDiscover)
 	mux.HandleFunc("GET /v1/browser/actions/next", s.nextAction)
 	mux.HandleFunc("POST /v1/browser/actions/{id}/complete", s.completeAction)
 	mux.Handle("GET /", uiHandler())
@@ -48,12 +71,119 @@ func New(service *assistant.Service, broker *browser.Broker, actionTimeout time.
 func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 750*time.Millisecond)
 	defer cancel()
+	gmailStatus := gmail.Status{}
+	if s.gmail != nil {
+		gmailStatus = s.gmail.Status()
+	}
+	wizStatus := map[string]any{"configured": false, "devices": []wiz.Device{}}
+	if s.wiz != nil {
+		wizStatus = map[string]any{"configured": true, "devices": s.wiz.Devices()}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":  "ok",
 		"browser": s.broker.Status(time.Now()),
 		"voice":   map[string]bool{"configured": s.transcriber != nil},
 		"llm":     s.assistant.LLMStatus(ctx),
+		"gmail":   gmailStatus,
+		"wiz":     wizStatus,
 	})
+}
+
+func (s *Server) wizStatus(w http.ResponseWriter, _ *http.Request) {
+	if s.wiz == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"configured": false, "devices": []wiz.Device{}})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"configured": true, "devices": s.wiz.Devices()})
+}
+
+func (s *Server) wizDiscover(w http.ResponseWriter, r *http.Request) {
+	if s.wiz == nil {
+		writeError(w, http.StatusServiceUnavailable, "WiZ integration is not configured")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+	devices, err := s.wiz.Discover(ctx)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"devices": devices})
+}
+
+func (s *Server) gmailStatus(w http.ResponseWriter, _ *http.Request) {
+	if s.gmail == nil {
+		writeJSON(w, http.StatusOK, gmail.Status{})
+		return
+	}
+	writeJSON(w, http.StatusOK, s.gmail.Status())
+}
+
+func (s *Server) gmailAuthStart(w http.ResponseWriter, r *http.Request) {
+	if s.gmail == nil {
+		writeError(w, http.StatusServiceUnavailable, "Gmail integration is not configured")
+		return
+	}
+	url, err := s.gmail.AuthorizationURL()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	if strings.Contains(r.Header.Get("Accept"), "text/html") {
+		http.Redirect(w, r, url, http.StatusSeeOther)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"authorization_url": url})
+}
+
+func (s *Server) gmailAuthCallback(w http.ResponseWriter, r *http.Request) {
+	if s.gmail == nil {
+		writeError(w, http.StatusServiceUnavailable, "Gmail integration is not configured")
+		return
+	}
+	if providerError := r.URL.Query().Get("error"); providerError != "" {
+		writeError(w, http.StatusBadRequest, "Gmail authorization was declined: "+providerError)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	if err := s.gmail.CompleteAuthorization(ctx, r.URL.Query().Get("state"), r.URL.Query().Get("code")); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.WriteString(w, "<!doctype html><title>Gmail connected</title><h1>Gmail connected to Nox.</h1><p>You can close this tab.</p>")
+}
+
+func (s *Server) gmailMessages(w http.ResponseWriter, r *http.Request) {
+	if s.gmail == nil {
+		writeError(w, http.StatusServiceUnavailable, "Gmail integration is not configured")
+		return
+	}
+	limit := int64(10)
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		parsed, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || parsed < 1 || parsed > 50 {
+			writeError(w, http.StatusBadRequest, "limit must be between 1 and 50")
+			return
+		}
+		limit = parsed
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	messages, err := s.gmail.ListMessages(ctx, r.URL.Query().Get("query"), limit)
+	if err != nil {
+		status := http.StatusBadGateway
+		if errors.Is(err, gmail.ErrNotConnected) {
+			status = http.StatusUnauthorized
+		}
+		writeError(w, status, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"messages": messages})
 }
 
 func (s *Server) voiceCommand(w http.ResponseWriter, r *http.Request) {

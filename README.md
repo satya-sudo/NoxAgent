@@ -25,6 +25,8 @@ web dashboard, an interactive terminal, or its HTTP API.
 - Create, list, and cancel persistent timers and alarms.
 - Recover scheduled timers and alarms after a Nox restart.
 - Control Home Assistant lights, switches, scenes, and read entity state.
+- Check unread Gmail and search message metadata through read-only OAuth.
+- Discover and control WiZ lights and projectors directly over the local LAN.
 - Run without a cloud speech or conversational API.
 
 ## Architecture
@@ -192,6 +194,8 @@ natural phrasings to the same registered actions.
 | Home | `Turn on the living room lights`, `turn off the coffee machine switch` |
 | Scenes | `Activate scene movie night` |
 | Sensors | `Status of bedroom temperature` |
+| Gmail | `Check my email`, `search Gmail for from:alice` |
+| WiZ | `Turn on the T-Beamer`, `make the T-Beamer warm and 20%` |
 | Conversation | `Tell me something about the Moon`, then `How long does it take to orbit us?` |
 
 Nox returns a short identifier when it creates an alarm or timer. Use that
@@ -214,6 +218,12 @@ Nox is configured with environment variables.
 | `NOX_LLM_API_KEY` | unset | Optional local-server API key |
 | `NOX_HOME_ASSISTANT_URL` | unset | Home Assistant base URL |
 | `NOX_HOME_ASSISTANT_TOKEN` | unset | Home Assistant long-lived access token |
+| `NOX_GMAIL_CREDENTIALS_PATH` | unset | Google OAuth web-client JSON; enables Gmail |
+| `NOX_GMAIL_TOKEN_PATH` | OS user config directory | Protected local OAuth token file |
+| `NOX_GMAIL_REDIRECT_URL` | `http://127.0.0.1:7080/v1/integrations/gmail/auth/callback` | OAuth callback URL |
+| `NOX_WIZ_ENABLED` | `false` | Enable direct local WiZ control |
+| `NOX_WIZ_LIGHTS` | unset | Optional aliases such as `t-beamer=192.168.1.50` |
+| `NOX_WIZ_BROADCAST` | `255.255.255.255` | LAN broadcast address used for discovery |
 
 Voice recognition is enabled only when both `NOX_WHISPER_BIN` and
 `NOX_WHISPER_MODEL` are set. The LLM is optional; without it, registered
@@ -235,6 +245,65 @@ Nox resolves Home Assistant friendly names. State changes are restricted to
 `light`, `switch`, and `scene` entities. Tokens should be stored in a protected
 environment file and must not be committed.
 
+## Gmail integration
+
+The initial Gmail integration is deliberately read-only. It can report its
+connection state, answer `check my email`, search message metadata, and retrieve
+snippets, but it cannot
+send, modify, archive, or delete mail.
+
+1. Create a project in Google Cloud and enable the Gmail API.
+2. Configure the OAuth consent screen.
+3. Create an **OAuth client ID** with application type **Web application**.
+4. Add this exact authorized redirect URI:
+   `http://127.0.0.1:7080/v1/integrations/gmail/auth/callback`
+5. Download the client JSON outside the repository and start Nox with:
+
+```sh
+export NOX_GMAIL_CREDENTIALS_PATH="$HOME/.config/nox/gmail-client.json"
+make run
+```
+
+Start authorization and open the returned `authorization_url` in a browser:
+
+```sh
+curl -sS http://127.0.0.1:7080/v1/integrations/gmail/auth/start
+```
+
+Google redirects back to Nox after consent. The refresh token is saved by
+default under the OS user configuration directory with mode `0600`. OAuth
+client files and Gmail token files are ignored by Git; neither should be
+committed. If Nox listens at another address, configure the same exact URL in
+Google Cloud and `NOX_GMAIL_REDIRECT_URL`.
+
+## WiZ local control
+
+Nox controls WiZ devices directly from Go over UDP port `38899`; it does not
+need Home Assistant, an MCP subprocess, a cloud API, or an API key. Enable
+**Local communication** in the WiZ app, keep Nox and the device on the same
+LAN, and add this to `.env`:
+
+```env
+NOX_WIZ_ENABLED=true
+```
+
+Trigger discovery after restarting Nox:
+
+```sh
+curl -sS -X POST http://127.0.0.1:7080/v1/integrations/wiz/discover
+curl -sS http://127.0.0.1:7080/v1/integrations/wiz/status
+```
+
+If broadcast discovery is blocked by the router or macOS firewall, assign the
+T-Beamer a DHCP reservation and configure it explicitly:
+
+```env
+NOX_WIZ_LIGHTS=t-beamer=192.168.1.50
+```
+
+The current integration supports on/off, brightness from 10–100%, and color
+temperature from 2200–6500 K. RGB colors and WiZ scenes are planned next.
+
 ## HTTP API
 
 ### Health and runtime status
@@ -245,7 +314,18 @@ curl -sS http://127.0.0.1:7080/v1/status
 ```
 
 `/v1/status` reports browser bridge, speech recognition, and local LLM
-availability.
+availability, plus Gmail configuration and connection state.
+
+### Gmail status and read-only message listing
+
+```sh
+curl -sS http://127.0.0.1:7080/v1/integrations/gmail/status
+curl -sS 'http://127.0.0.1:7080/v1/integrations/gmail/messages?limit=10&query=is%3Aunread'
+```
+
+The `query` value uses Gmail search syntax. The result contains sender,
+subject, date, snippet, message ID, and thread ID; message bodies are not
+returned. The maximum page size is 50.
 
 ### Submit a text command
 
@@ -296,6 +376,8 @@ Google or YouTube Music interface changes can require selector updates.
 - The default API and model commands bind to loopback addresses only.
 - LLM-selected actions are checked against a fixed allowlist.
 - Home Assistant credentials are read from environment variables.
+- Gmail uses the read-only OAuth scope and stores its refresh token locally in
+  a file protected with mode `0600`.
 - Google Search and YouTube Music necessarily communicate with their respective
   websites through the signed-in browser.
 
@@ -373,6 +455,8 @@ internal/voice/           whisper.cpp command wrapper
 internal/browser/         Typed browser-action broker
 internal/scheduler/       Persistent timers and alarms
 internal/homeassistant/   Home Assistant client
+internal/gmail/           Gmail OAuth and read-only API client
+internal/wiz/             Native WiZ LAN discovery and UDP control
 internal/notify/          macOS/Linux notifications
 extension/                Chromium browser bridge
 deployments/systemd/      Linux user service
@@ -429,6 +513,8 @@ echo the query, but Google page changes can still affect extraction.
 - Add barge-in so the user can interrupt a spoken response.
 - Add continuous alarm ringing, snooze, and voice dismissal.
 - Add reminders and recurring schedules.
+- Add dashboard cards for read-only Gmail summaries after the OAuth foundation
+  is validated.
 - Add a noisy-room and accent evaluation suite.
 - Harden browser automation against Google and YouTube Music UI changes.
 - Package the Go daemon, model services, models, and permissions for a one-step

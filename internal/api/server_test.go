@@ -97,7 +97,7 @@ func TestHandsFreeVoiceIgnoresSpeechWithoutWakeWord(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "/v1/voice/commands", bytes.NewReader(make([]byte, 44)))
 	request.Header.Set("X-Nox-Require-Wake", "true")
 	recorder := httptest.NewRecorder()
-	New(assistant.New(assistant.Dependencies{Browser: broker}), broker, time.Second, logger, fixedTranscriber("play music")).ServeHTTP(recorder, request)
+	New(assistant.New(assistant.Dependencies{Browser: broker}), broker, time.Second, logger, WithTranscriber(fixedTranscriber("play music"))).ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusOK || !bytes.Contains(recorder.Body.Bytes(), []byte(`"ignored":true`)) {
 		t.Fatalf("voice response status = %d, body = %s", recorder.Code, recorder.Body.String())
 	}
